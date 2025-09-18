@@ -12,9 +12,10 @@ import create_world
 from managers import EconomyManager, WaybillManager, TrainManager
 
 from textual.app import App, ComposeResult
-from textual.widgets import Header, Footer, Static, DataTable
+from textual.screen import Screen
+from textual.widgets import Header, Footer, Static, DataTable, Input, Button
 from textual.reactive import reactive
-from textual.containers import ScrollableContainer, Horizontal
+from textual.containers import ScrollableContainer, Horizontal, Vertical
 
 class Simulation:
     """
@@ -52,9 +53,10 @@ class StatusPanel(Static):
         self.year = config.STARTING_YEAR + (new_tick // (config.TICKS_PER_DAY * 365))
 
     def render(self) -> str:
+        day_of_year = (self.tick // config.TICKS_PER_DAY) % 365 + 1
         return (
             f"Cash: ${self.cash:,.2f} | "
-            f"Date: Y{self.year} D{self.tick % 365 + 1} | "
+            f"Date: Y{self.year} D{day_of_year} | "
             f"Tick: {self.tick} | "
             f"Contracts Available: {self.contracts}"
         )
@@ -88,8 +90,53 @@ class WorldMap(Static):
         # Convert grid to a single string
         return "\n".join("".join(row) for row in grid)
 
+class CreateTrainScreen(Screen):
+    """A modal screen for creating a new train."""
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Static("Create a New Train", id="create_train_title"),
+            Input(placeholder="Train Name (e.g., Express-1)", id="train_name"),
+            Input(placeholder="Loco Type (e.g., type_a)", id="loco_type"),
+            Input(placeholder="Schedule (e.g., 1,5,3)", id="schedule"),
+            Horizontal(
+                Button("Create", variant="primary", id="create"),
+                Button("Cancel", id="cancel"),
+                id="buttons"
+            ),
+            id="create_train_dialog"
+        )
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "create":
+            try:
+                name = self.query_one("#train_name", Input).value
+                loco_type = self.query_one("#loco_type", Input).value
+                schedule_str = self.query_one("#schedule", Input).value
+                schedule = [int(n.strip()) for n in schedule_str.split(',')]
+
+                # Basic validation
+                if not name or not loco_type or not schedule:
+                    # Could add a popup/notification later
+                    return
+
+                self.app.sim.train_manager.create_train(name, loco_type, schedule)
+                self.app.pop_screen()
+
+            except ValueError:
+                # Handle error if schedule is not valid integers
+                # Could add a popup/notification later
+                pass
+        elif event.button.id == "cancel":
+            self.app.pop_screen()
+
+
 class SimulationApp(App):
     """The main Textual application for the simulation."""
+
+    BINDINGS = [
+        ("enter", "accept_contract", "Accept Contract"),
+        ("c", "show_create_train_screen", "Create Train"),
+    ]
 
     TITLE = "Freight Rail Logistics Simulation"
     CSS_PATH = "main.css" # We can add styling later
@@ -114,6 +161,7 @@ class SimulationApp(App):
         """Called when the app is mounted."""
         # Setup Contracts Table
         contracts_table = self.query_one("#contracts_table", DataTable)
+        contracts_table.cursor_type = "row"
         contracts_table.add_column("ID", key="id")
         contracts_table.add_column("Origin", key="origin")
         contracts_table.add_column("Dest", key="dest")
@@ -154,6 +202,33 @@ class SimulationApp(App):
         for train in self.sim.train_manager.trains.values():
             location = f"Node {train.current_location_id}" if train.current_location_id is not None else "In Transit"
             trains_table.add_row(train.id, train.name, train.state, location)
+
+    def _accept_selected_contract(self) -> None:
+        """Accepts the currently selected contract in the DataTable."""
+        contracts_table = self.query_one("#contracts_table", DataTable)
+        if not contracts_table.is_valid_cursor_coord:
+            return
+
+        row_key = contracts_table.cursor_row
+        row = contracts_table.get_row_by_key(row_key)
+        if row:
+            contract_id = row[0]
+            if self.sim.waybill_manager.accept_contract(contract_id):
+                # The UI will update on the next tick automatically
+                pass
+
+    def action_accept_contract(self) -> None:
+        """Called when the user presses the 'enter' key."""
+        self._accept_selected_contract()
+
+    def action_show_create_train_screen(self) -> None:
+        """Pushes the CreateTrainScreen onto the view."""
+        self.push_screen(CreateTrainScreen())
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        """Called when a user clicks a row in a DataTable."""
+        if event.table.id == "contracts_table":
+            self._accept_selected_contract()
 
 if __name__ == "__main__":
     app = SimulationApp()
