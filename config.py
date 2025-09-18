@@ -10,9 +10,21 @@ WORLD_SIZE = (50, 20)  # Width, Height
 CITY_DENSITY = 0.1
 INDUSTRY_DENSITY = 0.2
 TERRAIN_TYPES = {
-    "plains": {"cost": 1, "char": "."},
-    "hills": {"cost": 3, "char": "n"},
-    "mountains": {"cost": 5, "char": "^"},
+    "plains": {
+        "cost": 1,
+        "char": ".",
+        "valid_industries": ["forest", "city", "sawmill", "furniture_factory", "power_plant", "grain_elevator", "food_processor"]
+    },
+    "hills": {
+        "cost": 3,
+        "char": "n",
+        "valid_industries": ["forest", "coal_mine", "steel_mill", "tool_factory"]
+    },
+    "mountains": {
+        "cost": 5,
+        "char": "^",
+        "valid_industries": ["iron_ore_mine", "coal_mine"]
+    },
 }
 
 # Economy
@@ -28,15 +40,22 @@ MAX_CONTRACT_LENGTH = 500 # In game ticks
 
 # Industries & Supply Chains
 INDUSTRIES = {
+    # Mines
     "coal_mine": {"output": "coal"},
     "iron_ore_mine": {"output": "iron_ore"},
+    # Processing
     "steel_mill": {"input": ["coal", "iron_ore"], "output": "steel"},
     "sawmill": {"input": ["logs"], "output": "lumber"},
+    "food_processor": {"input": ["grain"], "output": "food"},
+    # Raw Materials
     "forest": {"output": "logs"},
+    "grain_elevator": {"output": "grain"},
+    # Manufacturing
     "furniture_factory": {"input": ["lumber"], "output": "furniture"},
-    "power_plant": {"input": ["coal"], "output": None},
     "tool_factory": {"input": ["steel"], "output": "tools"},
-    "city": {"input": ["furniture", "tools"], "output": None}
+    # Consumers
+    "power_plant": {"input": ["coal"], "output": None},
+    "city": {"input": ["furniture", "tools", "food"], "output": None}
 }
 
 # Train and Railcar

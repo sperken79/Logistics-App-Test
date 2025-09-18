@@ -13,16 +13,22 @@ from typing import List, Tuple, Dict, Set
 import config
 from game_objects import Node, Link
 
-def create_world(size: Tuple[int, int]) -> Dict:
+from typing import Optional
+
+def create_world(size: Tuple[int, int], seed: Optional[int] = None) -> Dict:
     """
     Generates the game world.
 
     Args:
         size: A tuple (width, height) for the world dimensions.
+        seed: An optional integer to seed the random number generator for reproducible worlds.
 
     Returns:
         A dictionary containing the list of nodes and links.
     """
+    if seed is not None:
+        random.seed(seed)
+
     width, height = size
     nodes: Dict[int, Node] = {}
     links: List[Link] = []
@@ -46,13 +52,17 @@ def create_world(size: Tuple[int, int]) -> Dict:
 
             # Place an industry?
             if random.random() < config.INDUSTRY_DENSITY:
-                industry_type = random.choice(list(config.INDUSTRIES.keys()))
-                # Avoid placing a city industry type manually
-                if industry_type == 'city':
-                    continue
-                name = f"{industry_type.replace('_', ' ').title()}-{node_id_counter}"
-                nodes[node_id_counter] = Node(id=node_id_counter, name=name, pos=(x, y), node_type='industry', industry_type=industry_type)
-                node_id_counter += 1
+                terrain_type = terrain_grid[y][x]
+                valid_industries = config.TERRAIN_TYPES[terrain_type].get('valid_industries', [])
+
+                # Exclude 'city' type from being placed as an industry here
+                valid_industries = [ind for ind in valid_industries if ind != 'city']
+
+                if valid_industries:
+                    industry_type = random.choice(valid_industries)
+                    name = f"{industry_type.replace('_', ' ').title()}-{node_id_counter}"
+                    nodes[node_id_counter] = Node(id=node_id_counter, name=name, pos=(x, y), node_type='industry', industry_type=industry_type)
+                    node_id_counter += 1
 
     if not nodes:
         # Ensure at least two nodes exist to prevent errors
@@ -128,6 +138,6 @@ def create_world(size: Tuple[int, int]) -> Dict:
 
 if __name__ == '__main__':
     # Example of how to generate a world
-    world_data = create_world(config.WORLD_SIZE)
-    print(f"Generated {len(world_data['nodes'])} nodes and {len(world_data['links'])} links.")
+    world_data = create_world(config.WORLD_SIZE, seed=12345)
+    print(f"Generated {len(world_data['nodes'])} nodes and {len(world_data['links'])} links using seed 12345.")
     # print(world_data)

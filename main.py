@@ -19,9 +19,9 @@ class Simulation:
     The main class that orchestrates the entire simulation,
     including the game loop and user command processing.
     """
-    def __init__(self):
+    def __init__(self, size, seed):
         print("Initializing simulation...")
-        world_data = create_world.create_world(config.WORLD_SIZE)
+        world_data = create_world.create_world(size, seed)
         self.nodes = world_data['nodes']
         self.links = world_data['links']
 
@@ -230,6 +230,38 @@ class Simulation:
             print(f"Unknown create command: '{args[0]}'. Try 'create train'.")
 
 
+def setup_new_game():
+    """Prompts the user to configure world generation settings."""
+    print("--- New Game Setup ---")
+
+    # Map Size
+    size_options = {
+        "1": ("Small", (40, 15)),
+        "2": ("Medium", (60, 25)),
+        "3": ("Large", (80, 35)),
+    }
+    print("Select a map size:")
+    for key, (name, dims) in size_options.items():
+        print(f"  {key}. {name} {dims}")
+
+    size_choice = ""
+    while size_choice not in size_options:
+        size_choice = input("Enter choice (1-3): ").strip()
+
+    size = size_options[size_choice][1]
+
+    # Map Seed
+    seed_input = input("Enter a map seed (optional, press Enter for random): ").strip()
+    seed = None
+    if seed_input.isdigit():
+        seed = int(seed_input)
+        print(f"Using map seed: {seed}")
+    else:
+        print("Using a random seed.")
+
+    return size, seed
+
 if __name__ == "__main__":
-    sim = Simulation()
+    world_size, world_seed = setup_new_game()
+    sim = Simulation(size=world_size, seed=world_seed)
     sim.run()
