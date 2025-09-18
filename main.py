@@ -227,7 +227,7 @@ class SimulationApp(App):
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Called when a user clicks a row in a DataTable."""
-        if event.table.id == "contracts_table":
+        if event.control.id == "contracts_table":
             self._accept_selected_contract()
 
 if __name__ == "__main__":
