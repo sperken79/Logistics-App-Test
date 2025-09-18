@@ -35,8 +35,8 @@ class Link:
 class Railcar:
     """Represents a single railcar."""
     id: int
-    current_location_id: Optional[int] # Node ID
     car_type: str = "boxcar"
+    current_location_id: Optional[int] # Node ID
     state: str = "empty"  # 'empty', 'loading', 'loaded', 'unloading'
     cargo: Optional[str] = None
     destination_id: Optional[int] = None
