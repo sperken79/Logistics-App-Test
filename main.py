@@ -193,10 +193,16 @@ class Game:
         self.ticks_per_second = config.TICKS_PER_DAY
 
     def run(self):
+        screenshot_saved = False
         while self.running:
             self.handle_events()
             self.update()
             self.render()
+            # Save a screenshot after the first frame
+            if not screenshot_saved:
+                pygame.image.save(self.screen, "screenshot.png")
+                print("Screenshot saved as screenshot.png")
+                screenshot_saved = True
             self.clock.tick(60)
         pygame.quit()
         sys.exit()
