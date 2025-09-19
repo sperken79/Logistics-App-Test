@@ -10,6 +10,7 @@ from typing import List
 import config
 import create_world
 from managers import EconomyManager, WaybillManager, TrainManager
+from game_objects import Node
 
 from textual.app import App, ComposeResult
 from textual.screen import Screen
@@ -343,16 +344,17 @@ class SimulationApp(App):
     def _accept_selected_contract(self) -> None:
         """Accepts the currently selected contract in the DataTable."""
         contracts_table = self.query_one("#contracts_table", DataTable)
-        if not contracts_table.is_valid_cursor_coord:
+        if not contracts_table.is_valid_coordinate(contracts_table.cursor_coordinate):
             return
 
-        row_key = contracts_table.cursor_row
-        row = contracts_table.get_row_by_key(row_key)
-        if row:
-            contract_id = row[0]
-            if self.sim.waybill_manager.accept_contract(contract_id):
-                # The UI will update on the next tick automatically
-                pass
+        row_index = contracts_table.cursor_row
+        if row_index >= 0 and row_index < contracts_table.row_count:
+            row = contracts_table.get_row_at(row_index)
+            if row:
+                contract_id = row[0]
+                if self.sim.waybill_manager.accept_contract(contract_id):
+                    # The UI will update on the next tick automatically
+                    pass
 
     def action_accept_contract(self) -> None:
         """Called when the user presses the 'enter' key."""
