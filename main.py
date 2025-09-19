@@ -6,6 +6,7 @@ It launches the Textual-based user interface.
 """
 
 from typing import List
+import math
 
 import config
 import create_world
