@@ -41,10 +41,11 @@ class EconomyManager:
 
 class WaybillManager:
     """Manages contracts, waybills, and finds optimal paths for railcars."""
-    def __init__(self, nodes: List[Node], links: List[Link], economy_manager: EconomyManager):
+    def __init__(self, nodes: List[Node], links: List[Link], economy_manager: EconomyManager, logger):
         self.nodes = {node.id: node for node in nodes}
         self.links = links
         self.economy_manager = economy_manager
+        self.logger = logger
         self.contracts: Dict[int, Contract] = {}
         self.active_waybills: Dict[int, Waybill] = {}
         self.completed_waybills: List[Waybill] = []
@@ -134,13 +135,13 @@ class WaybillManager:
                     if car.ticks_in_state >= config.LOADING_TICKS:
                         if car.state == 'loading':
                             car.state = 'loaded'
-                            print(f"Car {car.id} finished loading with {car.cargo} at Node {node.id}.")
+                            self.logger.write_line(f"Car {car.id} finished loading with {car.cargo} at Node {node.id}.")
                         elif car.state == 'unloading':
                             car.state = 'empty'
                             # Complete the waybill now that unloading is finished
                             if car.waybill:
                                 self.complete_waybill(car.waybill.id)
-                            print(f"Car {car.id} finished unloading at Node {node.id}.")
+                            self.logger.write_line(f"Car {car.id} finished unloading at Node {node.id}.")
                         car.ticks_in_state = 0
 
         # 2. Update active contracts
@@ -184,7 +185,7 @@ class WaybillManager:
     def accept_contract(self, contract_id: int) -> bool:
         if contract_id in self.contracts and self.contracts[contract_id].state == 'offered':
             self.contracts[contract_id].state = 'active'
-            print(f"Contract {contract_id} accepted!")
+            self.logger.write_line(f"Contract {contract_id} accepted!")
             return True
         return False
 
@@ -249,27 +250,28 @@ class WaybillManager:
 
 class TrainManager:
     """Manages the fleet of trains, their movement, and their interaction with cargo."""
-    def __init__(self, nodes: List[Node], links: List[Link], waybill_manager: WaybillManager, economy_manager: EconomyManager):
+    def __init__(self, nodes: List[Node], links: List[Link], waybill_manager: WaybillManager, economy_manager: EconomyManager, logger):
         self.nodes = {node.id: node for node in nodes}
         self.links_map = {(l.node1_id, l.node2_id): l for l in links}
         self.links_map.update({(l.node2_id, l.node1_id): l for l in links})
         self.waybill_manager = waybill_manager
         self.economy_manager = economy_manager
+        self.logger = logger
         self.trains: Dict[int, Train] = {}
         self._train_id_counter = 0
 
     def create_train(self, name: str, locomotive_type: str, schedule: List[int]):
         """Creates a new train."""
         if not schedule:
-            print("Error: Cannot create a train with an empty schedule.")
+            self.logger.write_line("Error: Cannot create a train with an empty schedule.")
             return None
         if locomotive_type not in config.LOCOMOTIVE_STATS:
-            print(f"Error: Unknown locomotive type '{locomotive_type}'.")
+            self.logger.write_line(f"Error: Unknown locomotive type '{locomotive_type}'.")
             return None
 
         cost = config.LOCOMOTIVE_STATS[locomotive_type]['cost']
         if not self.economy_manager.deduct_cost(cost):
-            print("Error: Not enough cash to build this locomotive.")
+            self.logger.write_line("Error: Not enough cash to build this locomotive.")
             return None
 
         start_node_id = schedule[0]
@@ -282,7 +284,7 @@ class TrainManager:
         )
         self.trains[self._train_id_counter] = new_train
         self._train_id_counter += 1
-        print(f"Train '{name}' created at Node {start_node_id}.")
+        self.logger.write_line(f"Train '{name}' created at Node {start_node_id}.")
         return new_train
 
     def update(self):
@@ -312,7 +314,7 @@ class TrainManager:
 
             elif train.state == 'waiting_for_yard_space':
                 # Re-try switching to see if space has cleared
-                print(f"Train '{train.name}' is waiting for yard space at Node {train.current_location_id}.")
+                self.logger.write_line(f"Train '{train.name}' is waiting for yard space at Node {train.current_location_id}.")
                 self._process_switching_at_node(train)
 
 
@@ -363,7 +365,7 @@ class TrainManager:
         if train.current_link is None:
             if train.current_location_id is None:
                 # This case should not happen, but as a safeguard:
-                print(f"Error: Train {train.name} is running but has no location or link. Setting to idle.")
+                self.logger.write_line(f"Error: Train {train.name} is running but has no location or link. Setting to idle.")
                 train.state = 'idle'
                 return
 
@@ -384,7 +386,7 @@ class TrainManager:
             train.current_link = (start_node, end_node)
             train.progress_on_link = 0
             train.current_location_id = None # Set location to None, as it's now in transit
-            print(f"Train '{train.name}' departing Node {start_node} for Node {end_node}.")
+            self.logger.write_line(f"Train '{train.name}' departing Node {start_node} for Node {end_node}.")
 
         # If train is on a link, advance its progress
         if train.current_link:
@@ -404,7 +406,7 @@ class TrainManager:
                     train.current_link = None
                     train.progress_on_link = 0
                     train.path_index += 1
-                    print(f"Train '{train.name}' arrived at Node {arrival_node_id}.")
+                    self.logger.write_line(f"Train '{train.name}' arrived at Node {arrival_node_id}.")
 
                     # If arrival is a scheduled stop, switch; otherwise, continue running
                     if arrival_node_id in train.schedule:
@@ -413,7 +415,7 @@ class TrainManager:
                         train.path_index = 0
             else:
                 # Should not happen with valid paths
-                print(f"Error: Could not find link {train.current_link} for train {train.name}")
+                self.logger.write_line(f"Error: Could not find link {train.current_link} for train {train.name}")
                 train.state = 'idle'
 
     def _process_switching_at_node(self, train: Train):
@@ -423,14 +425,14 @@ class TrainManager:
         node = self.nodes[train.current_location_id]
         loco_power = config.LOCOMOTIVE_STATS[train.locomotive_type]['power']
 
-        print(f"Train '{train.name}' switching at Node {node.id} ({node.name}).")
+        self.logger.write_line(f"Train '{train.name}' switching at Node {node.id} ({node.name}).")
 
         # 1. Drop off cars whose destination is the current node
         cars_to_drop = [car for car in train.cars if car.destination_id == node.id]
 
         # Check for yard capacity BEFORE dropping cars
         if len(node.cars_at_node) + len(cars_to_drop) > node.capacity:
-            print(f"  - Yard at {node.name} is full! Train '{train.name}' must wait.")
+            self.logger.write_line(f"  - Yard at {node.name} is full! Train '{train.name}' must wait.")
             train.state = 'waiting_for_yard_space'
             return # Stop processing until there is space
 
@@ -445,7 +447,7 @@ class TrainManager:
             # Start unloading, waybill will be completed by WaybillManager after timer
             car.state = 'unloading'
             car.ticks_in_state = 0 # Reset timer
-            print(f"  - Dropped off car {car.id} with {car.cargo} at {node.name}. Now unloading.")
+            self.logger.write_line(f"  - Dropped off car {car.id} with {car.cargo} at {node.name}. Now unloading.")
 
         # 2. Pick up loaded cars at the node that are going to a future stop on the schedule
         cars_to_pickup = []
@@ -463,4 +465,4 @@ class TrainManager:
             node.cars_at_node.remove(car)
             train.cars.append(car)
             car.current_location_id = None # Car is now on the train, not at a node
-            print(f"  + Picked up car {car.id} with {car.cargo} for Node {car.destination_id}.")
+            self.logger.write_line(f"  + Picked up car {car.id} with {car.cargo} for Node {car.destination_id}.")
