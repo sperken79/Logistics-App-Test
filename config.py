@@ -7,8 +7,8 @@ for the freight rail logistics simulation.
 
 # World Generation
 WORLD_SIZE = (80, 24)  # Default world size
-CITY_DENSITY = 0.1
-INDUSTRY_DENSITY = 0.2
+CITY_DENSITY = 0.01
+INDUSTRY_DENSITY = 0.02
 TERRAIN_TYPES = {
     "plains": {
         "cost": 1,
