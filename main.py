@@ -11,7 +11,7 @@ import math
 import config
 import create_world
 from managers import EconomyManager, WaybillManager, TrainManager
-from game_objects import Node
+from game_objects import Node, Link
 
 from textual.app import App, ComposeResult
 from textual.screen import Screen
