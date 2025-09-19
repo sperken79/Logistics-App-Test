@@ -257,24 +257,39 @@ class CreateTrainScreen(Screen):
     def on_mount(self) -> None:
         self.query_one("#train_name").focus()
 
+    def set_speed(self, speed: float):
+        """Sets the game speed multiplier."""
+        base_interval = 1.0 / config.TICKS_PER_DAY
+        new_interval = base_interval / speed if speed > 0 else 9999
+
+        if self.game_loop_timer:
+            self.game_loop_timer.stop()
+
+        self.game_loop_timer = self.set_interval(new_interval, self.run_tick)
+
+        # Update button variants
+        for button in self.query("Button"):
+            if button.id.startswith("speed_"):
+                button.variant = "primary" if button.id == f"speed_{int(speed)}" else "default"
+
+    def action_pause_resume(self) -> None:
+        """Toggles the game pause state."""
+        if self.game_loop_timer.is_running:
+            self.game_loop_timer.pause()
+            self.query_one("#log_panel", Log).write("[b]-- PAUSED --[/b]")
+        else:
+            self.game_loop_timer.resume()
+            self.query_one("#log_panel", Log).write("[b]-- RESUMED --[/b]")
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "create":
-            try:
-                name = self.query_one("#train_name", Input).value
-                loco_type = self.query_one("#loco_type", Select).value
-                schedule_str = self.query_one("#schedule", Input).value
-                schedule = [int(n.strip()) for n in schedule_str.split(',')]
-                if not name or not loco_type or not schedule:
-                    return
-                self.app.sim.train_manager.create_train(name, loco_type, schedule)
-                self.app.pop_screen()
-            except ValueError:
-                pass
-        elif event.button.id == "cancel":
-            self.app.pop_screen()
+        """Handle button presses for the main app."""
+        if event.button.id.startswith("speed_"):
+            speed = float(event.button.id.split('_')[1])
+            self.set_speed(speed)
 
 class SimulationApp(App):
     BINDINGS = [
+        Binding("space", "pause_resume", "Pause/Resume"),
         Binding("enter", "accept_contract", "Accept Contract"),
         Binding("c", "show_create_train_screen", "Create Train"),
         Binding("b", "toggle_build_track_mode", "Build Track"),
@@ -287,6 +302,8 @@ class SimulationApp(App):
     build_node_type_to_build = None
     displayed_contract_ids = set()
 
+    game_loop_timer = None
+
     TITLE = "Freight Rail Logistics Simulation"
     CSS_PATH = "main.css"
 
@@ -298,13 +315,18 @@ class SimulationApp(App):
     def compose(self) -> ComposeResult:
         yield Header()
         yield StatusPanel(id="status_panel")
+        with Horizontal(classes="speed-controls"):
+            yield Button("1x", id="speed_1", variant="primary")
+            yield Button("2x", id="speed_2")
+            yield Button("5x", id="speed_5")
+            yield Button("10x", id="speed_10")
         yield ScrollableContainer(Static(id="world_map"), id="map_container")
         with Horizontal(id="data_tables"):
             yield DataTable(id="contracts_table")
             yield DataTable(id="trains_table")
         with Horizontal(id="bottom_panels"):
             yield Log(id="log_panel", max_lines=200)
-            yield Static("Click a node for details.", id="details_panel")
+            yield Static("Click a node for details.", id="details_panel", classes="details")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -313,7 +335,7 @@ class SimulationApp(App):
         map_container = self.query_one("#map_container")
         map_container.query("Static").remove()
         map_container.mount(WorldMap(self.sim.nodes, self.sim.links, self.sim.train_manager.trains, self.world_size))
-        self.query_one("#details_panel").border_title = "Details"
+        self.query_one("#details_panel").border_title = "Node Details"
         contracts_table = self.query_one("#contracts_table", DataTable)
         contracts_table.cursor_type = "row"
         contracts_table.add_column("ID", key="id")
@@ -325,7 +347,7 @@ class SimulationApp(App):
         trains_table.add_column("Name", key="name")
         trains_table.add_column("State", key="state")
         trains_table.add_column("Location", key="location")
-        self.set_interval(1.0 / config.TICKS_PER_DAY, self.run_tick)
+        self.set_speed(1.0)
 
     def run_tick(self) -> None:
         if self.sim is None:
@@ -374,6 +396,30 @@ class SimulationApp(App):
     def action_accept_contract(self) -> None:
         self._accept_selected_contract()
 
+    def set_speed(self, speed: float):
+        """Sets the game speed multiplier."""
+        base_interval = 1.0 / config.TICKS_PER_DAY
+        new_interval = base_interval / speed if speed > 0 else 9999
+
+        if self.game_loop_timer:
+            self.game_loop_timer.stop()
+
+        self.game_loop_timer = self.set_interval(new_interval, self.run_tick)
+
+        # Update button variants
+        for button in self.query("Button"):
+            if button.id.startswith("speed_"):
+                button.variant = "primary" if button.id == f"speed_{int(speed)}" else "default"
+
+    def action_pause_resume(self) -> None:
+        """Toggles the game pause state."""
+        if self.game_loop_timer and self.game_loop_timer.is_running:
+            self.game_loop_timer.pause()
+            self.query_one("#log_panel", Log).write("[b]-- PAUSED --[/b]")
+        elif self.game_loop_timer:
+            self.game_loop_timer.resume()
+            self.query_one("#log_panel", Log).write("[b]-- RESUMED --[/b]")
+
     def action_show_create_train_screen(self) -> None:
         self.push_screen(CreateTrainScreen())
 
@@ -392,6 +438,7 @@ class SimulationApp(App):
         node = message.node
         world_map = self.query_one(WorldMap)
         log_panel = self.query_one("#log_panel", Log)
+
         if self.is_build_track_mode:
             if self.build_mode_origin_node is None:
                 self.build_mode_origin_node = node
@@ -404,21 +451,28 @@ class SimulationApp(App):
                     world_map.links = self.sim.waybill_manager.links.copy()
                 self.build_mode_origin_node = None
                 world_map.selected_node_id = None
+            return
+
+        details_panel = self.query_one("#details_panel", Static)
+
+        content = Text.from_markup(f"[b]Node {node.id}: {node.name}[/b]\n")
+        content.append(f"Type: {node.node_type.title()}\n")
+        if node.industry_type:
+            content.append(f"Industry: {node.industry_type.replace('_', ' ').title()}\n")
+
+        content.append(f"\n[u]Offered Contracts:[/u]\n")
+        origin_contracts = [
+            c for c in self.sim.waybill_manager.contracts.values()
+            if c.state == 'offered' and c.origin_id == node.id
+        ]
+        if not origin_contracts:
+            content.append("None\n")
         else:
-            details_panel = self.query_one("#details_panel", Static)
-            content = Text.from_markup(f"[b]Node {node.id}: {node.name}[/b]\n")
-            content.append(f"Type: {node.node_type.title()}\n")
-            if node.industry_type:
-                content.append(f"Industry: {node.industry_type.replace('_', ' ').title()}\n")
-            content.append(f"Yard Capacity: {len(node.cars_at_node)} / {node.capacity}\n\n")
-            content.append("[u]Cars at this location:[/u]\n")
-            if not node.cars_at_node:
-                content.append("None")
-            else:
-                for car in node.cars_at_node:
-                    waybill_info = f"to Node {car.destination_id}" if car.waybill else "no waybill"
-                    content.append(f" - Car {car.id}: {car.state}, Cargo: {car.cargo or 'None'}, {waybill_info}\n")
-            details_panel.update(content)
+            for contract in origin_contracts:
+                dest_name = self.sim.waybill_manager.nodes[contract.destination_id].name
+                content.append(f" - To [b]{dest_name}[/b] shipping {contract.cargo}\n")
+
+        details_panel.update(content)
 
     def action_toggle_build_track_mode(self) -> None:
         self.is_build_track_mode = not self.is_build_track_mode
