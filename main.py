@@ -2,30 +2,40 @@
 main.py
 
 This is the main entry point for the freight rail logistics simulation.
-It launches the Textual-based user interface.
+It launches the Pygame-based user interface.
 """
 
-from typing import List
 import math
+import sys
+import logging
+
+import pygame
 
 import config
 import create_world
 from managers import EconomyManager, WaybillManager, TrainManager
 from game_objects import Node, Link
 
-from textual.app import App, ComposeResult
-from textual.screen import Screen
-from textual.widgets import Header, Footer, Static, DataTable, Input, Button, Log, Select
-from textual.binding import Binding
-from textual.message import Message
-from textual.reactive import reactive
-from rich.text import Text
-from textual.containers import ScrollableContainer, Horizontal, Vertical
+# --- Color Definitions ---
+COLOR_BACKGROUND = (20, 20, 40)
+COLOR_NODE_CITY = (200, 200, 200)
+COLOR_NODE_INDUSTRY = (150, 100, 50)
+COLOR_LINK = (100, 100, 100)
+COLOR_TRAIN = (255, 0, 0)
+COLOR_TEXT = (255, 255, 255)
+COLOR_SELECTED = (255, 255, 0)
+
+
+# --- Logging Setup ---
+class PrintLogger:
+    def write_line(self, message):
+        print(message)
+    def write(self, message):
+        print(message, end='')
 
 class Simulation:
     """
     A non-UI class to hold the core simulation state and managers.
-    This is now separate from the UI App class.
     """
     def __init__(self, size, seed, logger):
         self.logger = logger
@@ -33,6 +43,7 @@ class Simulation:
         world_data = create_world.create_world(size, seed)
         self.nodes = world_data['nodes']
         self.links = world_data['links']
+        self.node_map = {node.id: node for node in self.nodes}
 
         self.economy_manager = EconomyManager(config.STARTING_CASH)
         self.waybill_manager = WaybillManager(self.nodes, self.links, self.economy_manager, self.logger)
@@ -43,381 +54,223 @@ class Simulation:
 
     def tick(self):
         """Advances the simulation by one time step."""
-        # self.logger.write_line(f"--- Advancing Tick {self.game_tick} ---") # This gets too spammy
         self.waybill_manager.update()
         self.train_manager.update()
         self.game_tick += 1
 
     def build_track(self, node1: Node, node2: Node) -> bool:
         """Handles the logic for building a new track between two nodes."""
-        # 1. Check for existing link
         for link in self.waybill_manager.links:
             if (link.node1_id == node1.id and link.node2_id == node2.id) or \
                (link.node1_id == node2.id and link.node2_id == node1.id):
                 self.logger.write_line(f"Error: Track between {node1.name} and {node2.name} already exists.")
                 return False
-
-        # 2. Calculate distance and cost (simplified cost model)
         distance = math.hypot(node1.pos[0] - node2.pos[0], node1.pos[1] - node2.pos[1])
         cost = distance * config.TRACK_BUILD_COST_PER_UNIT
-
-        # 3. Check affordability and deduct cost
         if not self.economy_manager.deduct_cost(cost):
             self.logger.write_line(f"Error: Not enough cash to build track. Cost: ${cost:,.2f}")
             return False
-
-        # 4. Create and add the new link
         new_link = Link(node1_id=node1.id, node2_id=node2.id, length=distance, terrain="plains")
         self.waybill_manager.links.append(new_link)
-
-        # 5. Update graphs for pathfinding
         self.train_manager.links_map[(node1.id, node2.id)] = new_link
         self.train_manager.links_map[(node2.id, node1.id)] = new_link
         self.waybill_manager.adjacency_list[node1.id].append((node2.id, distance))
         self.waybill_manager.adjacency_list[node2.id].append((node1.id, distance))
-
         self.logger.write_line(f"Successfully built track between {node1.name} and {node2.name} for ${cost:,.2f}.")
         return True
 
-class StatusPanel(Static):
-    """A widget to display game status information."""
-    cash = reactive(0)
-    tick = reactive(0)
-    year = reactive(config.STARTING_YEAR)
-    contracts = reactive(0)
-    build_mode_active = reactive(False)
+class Renderer:
+    """Handles all drawing to the screen."""
+    def __init__(self, screen, font, sim, world_size):
+        self.screen = screen
+        self.font = font
+        self.sim = sim
+        self.world_width, self.world_height = world_size
+        self.screen_width, self.screen_height = screen.get_size()
+        self.padding = 40 # Increased padding
 
-    def watch_tick(self, new_tick: int) -> None:
-        self.year = config.STARTING_YEAR + (new_tick // (config.TICKS_PER_DAY * 365))
+    def _world_to_screen(self, x, y):
+        """Converts world coordinates to screen coordinates."""
+        screen_x = int(self.padding + x * (self.screen_width - 2 * self.padding) / self.world_width)
+        screen_y = int(self.padding + y * (self.screen_height - 2 * self.padding) / self.world_height)
+        return screen_x, screen_y
 
-    def render(self) -> str:
-        day_of_year = (self.tick // config.TICKS_PER_DAY) % 365 + 1
-        build_mode_status = "[BUILD MODE]" if self.build_mode_active else ""
-        return (
-            f"Cash: ${self.cash:,.2f} | "
-            f"Date: Y{self.year} D{day_of_year} | "
-            f"Tick: {self.tick} | "
-            f"Contracts Available: {self.contracts} {build_mode_status}"
-        )
+    def draw(self, ui_state):
+        """Draw the entire game state."""
+        self.screen.fill(COLOR_BACKGROUND)
+        self.draw_links()
+        self.draw_nodes(ui_state)
+        self.draw_trains()
+        self.draw_status_text(ui_state)
+        pygame.display.flip()
 
-class WorldMap(Static):
-    """A widget to display the world map."""
-
-    class NodeClicked(Message):
-        """Custom message to broadcast when a node is clicked."""
-        def __init__(self, node) -> None:
-            super().__init__()
-            self.node = node
-
-    nodes = reactive(list)
-    trains = reactive(dict)
-    links = reactive(list)
-    selected_node_id = reactive(None)
-
-    def __init__(self, nodes, links, trains, size, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.nodes = nodes
-        self.links = links
-        self.trains = trains
-        self.map_size = size
-        self.node_map = {node.id: node for node in nodes}
-
-    def _draw_line(self, grid, x1, y1, x2, y2, char):
-        """Draws a line on the grid using Bresenham's algorithm."""
-        dx = abs(x2 - x1)
-        dy = abs(y2 - y1)
-        sx = 1 if x1 < x2 else -1
-        sy = 1 if y1 < y2 else -1
-        err = dx - dy
-
-        while True:
-            if 0 <= y1 < len(grid) and 0 <= x1 < len(grid[0]) and grid[y1][x1] == ' ':
-                grid[y1][x1] = char
-            if x1 == x2 and y1 == y2:
-                break
-            e2 = 2 * err
-            if e2 > -dy:
-                err -= dy
-                x1 += sx
-            if e2 < dx:
-                err += dx
-                y1 += sy
-
-    def render(self) -> str:
-        """Render the map as a string."""
-        width, height = self.map_size
-        grid = [[' ' for _ in range(width)] for _ in range(height)]
-
-        # Draw links first so nodes are drawn on top
-        for link in self.links:
-            node1 = self.node_map.get(link.node1_id)
-            node2 = self.node_map.get(link.node2_id)
+    def draw_links(self):
+        """Draws the rail links."""
+        for link in self.sim.links:
+            node1 = self.sim.node_map.get(link.node1_id)
+            node2 = self.sim.node_map.get(link.node2_id)
             if node1 and node2:
-                self._draw_line(grid, node1.pos[0], node1.pos[1], node2.pos[0], node2.pos[1], '.')
+                start_pos = self._world_to_screen(*node1.pos)
+                end_pos = self._world_to_screen(*node2.pos)
+                pygame.draw.line(self.screen, COLOR_LINK, start_pos, end_pos, 1)
 
-        # Place nodes
-        for node in self.nodes:
-            x, y = node.pos
-            if 0 <= x < width and 0 <= y < height:
-                if node.id == self.selected_node_id:
-                    grid[y][x] = '*'  # Highlight selected node
-                else:
-                    grid[y][x] = 'C' if node.node_type == 'city' else 'I'
+    def draw_nodes(self, ui_state):
+        """Draws the nodes (cities and industries)."""
+        for node in self.sim.nodes:
+            pos = self._world_to_screen(*node.pos)
+            color = COLOR_NODE_CITY if node.node_type == 'city' else COLOR_NODE_INDUSTRY
+            radius = 7
 
-        # Place trains
-        for train in self.trains.values():
-            x, y = -1, -1
+            if ui_state['build_mode_origin_node'] and ui_state['build_mode_origin_node'].id == node.id:
+                 pygame.draw.circle(self.screen, COLOR_SELECTED, pos, radius + 5, 2)
+            elif ui_state['selected_node'] and ui_state['selected_node'].id == node.id:
+                pygame.draw.circle(self.screen, COLOR_SELECTED, pos, radius + 3, 2)
+
+            pygame.draw.circle(self.screen, color, pos, radius)
+
+    def draw_trains(self):
+        """Draws the trains on the map."""
+        for train in self.sim.train_manager.trains.values():
+            pos = None
             if train.current_location_id is not None:
-                if train.current_location_id in self.node_map:
-                    x, y = self.node_map[train.current_location_id].pos
+                node = self.sim.node_map.get(train.current_location_id)
+                if node:
+                    pos = self._world_to_screen(*node.pos)
             elif train.current_link is not None:
-                # Interpolate position on link
-                node1 = self.node_map.get(train.current_link[0])
-                node2 = self.node_map.get(train.current_link[1])
+                node1 = self.sim.node_map.get(train.current_link[0])
+                node2 = self.sim.node_map.get(train.current_link[1])
                 if node1 and node2:
-                    link_key = (node1.id, node2.id) if (node1.id, node2.id) in self.app.sim.train_manager.links_map else (node2.id, node1.id)
-                    if link_key in self.app.sim.train_manager.links_map:
-                        link_length = self.app.sim.train_manager.links_map[link_key].length
+                    link_key = (node1.id, node2.id) if (node1.id, node2.id) in self.sim.train_manager.links_map else (node2.id, node1.id)
+                    if link_key in self.sim.train_manager.links_map:
+                        link_length = self.sim.train_manager.links_map[link_key].length
                         progress = train.progress_on_link / link_length if link_length > 0 else 0
 
-                        x1, y1 = node1.pos
-                        x2, y2 = node2.pos
-                        x = int(x1 + (x2 - x1) * progress)
-                        y = int(y1 + (y2 - y1) * progress)
+                        x1, y1 = self._world_to_screen(*node1.pos)
+                        x2, y2 = self._world_to_screen(*node2.pos)
 
-            if 0 <= x < width and 0 <= y < height:
-                # Prevent train icon from overwriting a node icon
-                if grid[y][x] == ' ':
-                    grid[y][x] = 'T'
+                        pos = (int(x1 + (x2 - x1) * progress), int(y1 + (y2 - y1) * progress))
 
-        return "\n".join("".join(row) for row in grid)
+            if pos:
+                pygame.draw.rect(self.screen, COLOR_TRAIN, (pos[0] - 4, pos[1] - 4, 8, 8))
 
-    def on_click(self, event) -> None:
-        """Handle clicks on the map."""
-        # For now, we allow clicking to see details regardless of build mode.
-        # This might change when we implement track building.
-        click_x, click_y = event.x, event.y
-        for node in self.nodes:
-            if node.pos == (click_x, click_y):
-                self.post_message(self.NodeClicked(node))
-                break
+    def draw_status_text(self, ui_state):
+        """Draws cash, date, and other status info."""
+        cash = self.sim.economy_manager.cash
+        tick = self.sim.game_tick
+        year = config.STARTING_YEAR + (tick // (config.TICKS_PER_DAY * 365))
+        day_of_year = (tick // config.TICKS_PER_DAY) % 365 + 1
 
-class CreateTrainScreen(Screen):
-    """A modal screen for creating a new train."""
-    def compose(self) -> ComposeResult:
-        loco_options = [(loco, loco) for loco in config.LOCOMOTIVE_STATS.keys()]
-        yield Vertical(
-            Static("Create a New Train", id="create_train_title"),
-            Input(placeholder="Train Name (e.g., Express-1)", id="train_name"),
-            Select(loco_options, prompt="Select Loco Type", id="loco_type"),
-            Input(placeholder="Schedule (e.g., 1,5,3)", id="schedule"),
-            Horizontal(
-                Button("Create", variant="primary", id="create"),
-                Button("Cancel", id="cancel"),
-                id="buttons"
-            ),
-            id="create_train_dialog"
-        )
+        status_text = f"Cash: ${cash:,.2f} | Date: Y{year} D{day_of_year}"
+        build_mode_status = " | BUILD MODE (B)" if ui_state['is_build_mode'] else ""
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "create":
-            try:
-                name = self.query_one("#train_name", Input).value
-                loco_type = self.query_one("#loco_type", Select).value
-                schedule_str = self.query_one("#schedule", Input).value
-                schedule = [int(n.strip()) for n in schedule_str.split(',')]
-
-                # Basic validation
-                if not name or not loco_type or not schedule:
-                    # Could add a popup/notification later
-                    return
-
-                self.app.sim.train_manager.create_train(name, loco_type, schedule)
-                self.app.pop_screen()
-
-            except ValueError:
-                # Handle error if schedule is not valid integers
-                # Could add a popup/notification later
-                pass
-        elif event.button.id == "cancel":
-            self.app.pop_screen()
+        text_surface = self.font.render(status_text + build_mode_status, True, COLOR_TEXT)
+        self.screen.blit(text_surface, (10, 10))
 
 
-class SimulationApp(App):
-    """The main Textual application for the simulation."""
-
-    BINDINGS = [
-        Binding("enter", "accept_contract", "Accept Contract"),
-        Binding("c", "show_create_train_screen", "Create Train"),
-        Binding("b", "toggle_build_mode", "Build Track"),
-    ]
-
-    is_build_mode = reactive(False)
-    build_mode_origin_node = None
-
-    TITLE = "Freight Rail Logistics Simulation"
-    CSS_PATH = "main.css" # We can add styling later
-
+class Game:
+    """
+    The main class for the Pygame application. It handles the game loop,
+    rendering, and user input.
+    """
     def __init__(self):
-        super().__init__()
-        self.world_size = (80, 24)
-        # The simulation is now initialized in on_mount, after the logger is available
-        self.sim = None
+        pygame.init()
+        self.screen = pygame.display.set_mode((1280, 720))
+        pygame.display.set_caption("Freight Rail Logistics Simulation")
+        self.clock = pygame.time.Clock()
+        self.font = pygame.font.SysFont(None, 24)
+        self.running = True
 
-    def compose(self) -> ComposeResult:
-        """Create child widgets for the app."""
-        yield Header()
-        yield StatusPanel(id="status_panel")
-        yield ScrollableContainer(Static(id="world_map"), id="map_container")
-        with Horizontal(id="data_tables"):
-            yield DataTable(id="contracts_table")
-            yield DataTable(id="trains_table")
-        with Horizontal(id="bottom_panels"):
-            yield Log(id="log_panel", max_lines=200)
-            yield Static("Click a node for details.", id="details_panel")
-        yield Footer()
+        self.logger = PrintLogger()
+        self.sim = Simulation(size=config.WORLD_SIZE, seed=12345, logger=self.logger)
+        self.renderer = Renderer(self.screen, self.font, self.sim, config.WORLD_SIZE)
 
-    def on_mount(self) -> None:
-        """Called when the app is mounted."""
-        log_panel = self.query_one("#log_panel", Log)
-        self.sim = Simulation(size=self.world_size, seed=12345, logger=log_panel)
+        self.ui_state = {
+            'is_build_mode': False,
+            'build_mode_origin_node': None,
+            'selected_node': None,
+        }
+        self.tick_timer = 0
+        self.ticks_per_second = config.TICKS_PER_DAY
 
-        # Now that sim is created, populate the map
-        map_container = self.query_one("#map_container")
-        map_container.query("Static").remove()
-        map_container.mount(WorldMap(self.sim.nodes, self.sim.links, self.sim.train_manager.trains, self.world_size))
+    def run(self):
+        while self.running:
+            self.handle_events()
+            self.update()
+            self.render()
+            self.clock.tick(60)
+        pygame.quit()
+        sys.exit()
 
-        # Give the details panel a border
-        self.query_one("#details_panel").border_title = "Details"
+    def get_node_at_pos(self, screen_pos):
+        """Check if a screen position collides with any node."""
+        for node in self.sim.nodes:
+            node_screen_pos = self.renderer._world_to_screen(*node.pos)
+            distance = math.hypot(screen_pos[0] - node_screen_pos[0], screen_pos[1] - node_screen_pos[1])
+            if distance < 10: # Click radius
+                return node
+        return None
 
-        # Setup Contracts Table
-        contracts_table = self.query_one("#contracts_table", DataTable)
-        contracts_table.cursor_type = "row"
-        contracts_table.add_column("ID", key="id")
-        contracts_table.add_column("Origin", key="origin")
-        contracts_table.add_column("Dest", key="dest")
-        contracts_table.add_column("Cargo", key="cargo")
+    def handle_events(self):
+        """Process Pygame events."""
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                self.running = False
 
-        # Setup Trains Table
-        trains_table = self.query_one("#trains_table", DataTable)
-        trains_table.add_column("ID", key="id")
-        trains_table.add_column("Name", key="name")
-        trains_table.add_column("State", key="state")
-        trains_table.add_column("Location", key="location")
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_b:
+                    self.ui_state['is_build_mode'] = not self.ui_state['is_build_mode']
+                    self.ui_state['build_mode_origin_node'] = None # Reset on toggle
+                    self.logger.write_line(f"Build mode {'activated' if self.ui_state['is_build_mode'] else 'deactivated'}.")
 
-        self.set_interval(1.0 / config.TICKS_PER_DAY, self.run_tick)
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                if event.button == 1: # Left click
+                    clicked_node = self.get_node_at_pos(event.pos)
+                    if self.ui_state['is_build_mode']:
+                        self.handle_build_click(clicked_node)
+                    else:
+                        self.handle_select_click(clicked_node)
 
-    def run_tick(self) -> None:
-        """Run one tick of the simulation and update the UI."""
-        if self.sim is None:
-            return
-        self.sim.tick()
-
-        # Update Status Panel
-        status_panel = self.query_one(StatusPanel)
-        status_panel.cash = self.sim.economy_manager.cash
-        status_panel.tick = self.sim.game_tick
-        offered_contracts = len([c for c in self.sim.waybill_manager.contracts.values() if c.state == 'offered'])
-        status_panel.contracts = offered_contracts
-        status_panel.build_mode_active = self.is_build_mode
-
-        # Update World Map
-        world_map = self.query_one(WorldMap)
-        world_map.trains = self.sim.train_manager.trains.copy()
-        world_map.links = self.sim.waybill_manager.links.copy()
-
-        # Update Contracts Table
-        contracts_table = self.query_one("#contracts_table", DataTable)
-        contracts_table.clear()
-        for contract in self.sim.waybill_manager.contracts.values():
-            if contract.state == 'offered':
-                origin_name = self.sim.waybill_manager.nodes[contract.origin_id].name
-                dest_name = self.sim.waybill_manager.nodes[contract.destination_id].name
-                contracts_table.add_row(contract.id, origin_name, dest_name, contract.cargo)
-
-        # Update Trains Table
-        trains_table = self.query_one("#trains_table", DataTable)
-        trains_table.clear()
-        for train in self.sim.train_manager.trains.values():
-            location = f"Node {train.current_location_id}" if train.current_location_id is not None else "In Transit"
-            trains_table.add_row(train.id, train.name, train.state, location)
-
-    def _accept_selected_contract(self) -> None:
-        """Accepts the currently selected contract in the DataTable."""
-        contracts_table = self.query_one("#contracts_table", DataTable)
-        if not contracts_table.is_valid_coordinate(contracts_table.cursor_coordinate):
+    def handle_build_click(self, clicked_node):
+        """Handle a click event in build mode."""
+        if not clicked_node:
+            self.ui_state['build_mode_origin_node'] = None
             return
 
-        row_index = contracts_table.cursor_row
-        if row_index >= 0 and row_index < contracts_table.row_count:
-            row = contracts_table.get_row_at(row_index)
-            if row:
-                contract_id = row[0]
-                if self.sim.waybill_manager.accept_contract(contract_id):
-                    # The UI will update on the next tick automatically
-                    pass
-
-    def action_accept_contract(self) -> None:
-        """Called when the user presses the 'enter' key."""
-        self._accept_selected_contract()
-
-    def action_show_create_train_screen(self) -> None:
-        """Pushes the CreateTrainScreen onto the view."""
-        self.push_screen(CreateTrainScreen())
-
-    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        """Called when a user clicks a row in a DataTable."""
-        if event.control.id == "contracts_table":
-            self._accept_selected_contract()
-
-    def on_world_map_node_clicked(self, message: WorldMap.NodeClicked) -> None:
-        """Handle a node being clicked on the map."""
-        node = message.node
-        world_map = self.query_one(WorldMap)
-        log_panel = self.query_one("#log_panel", Log)
-
-        if self.is_build_mode:
-            if self.build_mode_origin_node is None:
-                self.build_mode_origin_node = node
-                world_map.selected_node_id = node.id
-                log_panel.write(f"Start node [b]{node.name}[/b] selected. Click a second node to build track.")
-            else:
-                origin_node = self.build_mode_origin_node
-                destination_node = node
-
-                if self.sim.build_track(origin_node, destination_node):
-                    # If build is successful, refresh the map instantly
-                    world_map.links = self.sim.waybill_manager.links.copy()
-
-                # Reset for the next build action
-                self.build_mode_origin_node = None
-                world_map.selected_node_id = None
+        if not self.ui_state['build_mode_origin_node']:
+            self.ui_state['build_mode_origin_node'] = clicked_node
+            self.logger.write_line(f"Build mode: Start node {clicked_node.name} selected.")
         else:
-            # If not in build mode, just show details
-            details_panel = self.query_one("#details_panel", Static)
-            content = Text.from_markup(f"[b]Node {node.id}: {node.name}[/b]\n")
-            content.append(f"Type: {node.node_type.title()}\n")
-            if node.industry_type:
-                content.append(f"Industry: {node.industry_type.replace('_', ' ').title()}\n")
-            content.append(f"Yard Capacity: {len(node.cars_at_node)} / {node.capacity}\n\n")
+            origin_node = self.ui_state['build_mode_origin_node']
+            if origin_node.id != clicked_node.id:
+                self.logger.write_line(f"Attempting to build track from {origin_node.name} to {clicked_node.name}.")
+                self.sim.build_track(origin_node, clicked_node)
+            # Reset after attempting to build
+            self.ui_state['build_mode_origin_node'] = None
 
-            content.append("[u]Cars at this location:[/u]\n")
-            if not node.cars_at_node:
-                content.append("None")
-            else:
-                for car in node.cars_at_node:
-                    waybill_info = f"to Node {car.destination_id}" if car.waybill else "no waybill"
-                    content.append(f" - Car {car.id}: {car.state}, Cargo: {car.cargo or 'None'}, {waybill_info}\n")
-            details_panel.update(content)
+    def handle_select_click(self, clicked_node):
+        """Handle a click event in select mode."""
+        self.ui_state['selected_node'] = clicked_node
+        if clicked_node:
+            self.logger.write_line(f"Selected node: {clicked_node.name} (ID: {clicked_node.id})")
+            # Log more details
+            self.logger.write_line(f"  Type: {clicked_node.node_type}, Industry: {clicked_node.industry_type}")
+            self.logger.write_line(f"  Cars at node: {len(clicked_node.cars_at_node)}")
+        else:
+            self.logger.write_line("No node selected.")
 
-    def action_toggle_build_mode(self) -> None:
-        """Toggles track building mode."""
-        self.is_build_mode = not self.is_build_mode
-        # Clear any selection when toggling build mode
-        if not self.is_build_mode:
-            self.build_mode_origin_node = None
-            self.query_one(WorldMap).selected_node_id = None
+
+    def update(self):
+        """Update game state based on a timer."""
+        self.tick_timer += self.clock.get_time() / 1000.0
+        while self.tick_timer > 1.0 / self.ticks_per_second:
+            self.sim.tick()
+            self.tick_timer -= 1.0 / self.ticks_per_second
+
+    def render(self):
+        """Draw everything to the screen."""
+        self.renderer.draw(self.ui_state)
+
 
 if __name__ == "__main__":
-    app = SimulationApp()
-    app.run()
+    game = Game()
+    game.run()
