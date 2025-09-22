@@ -94,10 +94,13 @@ class UIManager:
         self.create_train_button_rect = pygame.Rect(10, self.trains_panel_rect.bottom + 10, 250, 40)
 
         self.clock_buttons = {
-            "pause": pygame.Rect(10, 10, 40, 30),
-            "1x": pygame.Rect(60, 10, 40, 30),
-            "2x": pygame.Rect(110, 10, 40, 30),
-            "5x": pygame.Rect(160, 10, 40, 30),
+            "pause": pygame.Rect(10, 10, 35, 30),
+            "1x": pygame.Rect(55, 10, 35, 30),
+            "2x": pygame.Rect(100, 10, 35, 30),
+            "5x": pygame.Rect(145, 10, 35, 30),
+            "10x": pygame.Rect(190, 10, 35, 30),
+            "20x": pygame.Rect(235, 10, 35, 30),
+            "50x": pygame.Rect(280, 10, 35, 30),
         }
 
         self.create_train_panel_rect = pygame.Rect(self.screen_width // 2 - 150, self.screen_height // 2 - 100, 300, 200)
@@ -108,6 +111,9 @@ class UIManager:
         self.contract_details_panel_rect = pygame.Rect(self.screen_width // 2 - 175, self.screen_height // 2 - 125, 350, 250)
         self.accept_contract_button_rect = pygame.Rect(self.contract_details_panel_rect.x + 40, self.contract_details_panel_rect.y + 200, 100, 30)
         self.decline_contract_button_rect = pygame.Rect(self.contract_details_panel_rect.right - 140, self.contract_details_panel_rect.y + 200, 100, 30)
+
+        self.create_train_close_button_rect = pygame.Rect(self.create_train_panel_rect.right - 25, self.create_train_panel_rect.top + 5, 20, 20)
+        self.contract_details_close_button_rect = pygame.Rect(self.contract_details_panel_rect.right - 25, self.contract_details_panel_rect.top + 5, 20, 20)
 
         self.last_drawn_contracts = {}
 
@@ -132,6 +138,13 @@ class UIManager:
         title_surf = self.font.render(title, True, COLOR_TEXT)
         self.screen.blit(title_surf, (rect.x + 10, rect.y + 10))
         pygame.draw.line(self.screen, COLOR_TEXT, (rect.x + 5, rect.y + 35), (rect.right - 5, rect.y + 35))
+
+    def draw_close_button(self, rect):
+        mouse_pos = pygame.mouse.get_pos()
+        color = COLOR_BUTTON_HOVER if rect.collidepoint(mouse_pos) else COLOR_BUTTON
+        pygame.draw.rect(self.screen, color, rect, border_radius=3)
+        text_surf = self.font.render("X", True, COLOR_TEXT)
+        self.screen.blit(text_surf, text_surf.get_rect(center=rect.center))
 
     def draw_trains_panel(self, ui_state):
         self.draw_panel_background(self.trains_panel_rect, "Trains")
@@ -216,6 +229,7 @@ class UIManager:
 
     def draw_contract_details_panel(self, contract):
         self.draw_panel_background(self.contract_details_panel_rect, f"Contract Details (ID: {contract.id})")
+        self.draw_close_button(self.contract_details_close_button_rect)
         y_offset = 45
         origin_node = self.sim.node_map[contract.origin_id]
         dest_node = self.sim.node_map[contract.destination_id]
@@ -246,6 +260,7 @@ class UIManager:
 
     def draw_create_train_panel(self, ui_state):
         self.draw_panel_background(self.create_train_panel_rect, "Create New Train")
+        self.draw_close_button(self.create_train_close_button_rect)
         self.screen.blit(self.font.render("Name:", True, COLOR_TEXT), (self.train_name_input_rect.x, self.train_name_input_rect.y - 20))
         self.screen.blit(self.font.render("Schedule (Node IDs, comma-separated):", True, COLOR_TEXT), (self.train_schedule_input_rect.x, self.train_schedule_input_rect.y - 20))
         pygame.draw.rect(self.screen, COLOR_INPUT_BOX, self.train_name_input_rect)
@@ -268,6 +283,7 @@ class UIManager:
         if self.create_train_button_rect.collidepoint(pos):
             return {"toggle_create_train_panel": True}
         if ui_state['show_create_train_panel']:
+            if self.create_train_close_button_rect.collidepoint(pos): return {"close_create_train_panel": True}
             if self.train_name_input_rect.collidepoint(pos): return {"set_active_input": "name"}
             if self.train_schedule_input_rect.collidepoint(pos): return {"set_active_input": "schedule"}
             if self.submit_train_button_rect.collidepoint(pos): return {"submit_create_train": True}
@@ -276,8 +292,9 @@ class UIManager:
                 if rect.collidepoint(pos):
                     return {"select_contract": contract}
         if ui_state['selected_contract']:
+            if self.contract_details_close_button_rect.collidepoint(pos): return {"close_contract_details": True}
             if self.accept_contract_button_rect.collidepoint(pos): return {"accept_contract": ui_state['selected_contract']}
-            if self.decline_contract_button_rect.collidepoint(pos): return {"decline_contract": True}
+            if self.decline_contract_button_rect.collidepoint(pos): return {"decline_contract": ui_state['selected_contract']}
         return None
 
     def draw_top_bar(self, ui_state):
@@ -288,7 +305,7 @@ class UIManager:
         status_text = f"Cash: ${cash:,.2f} | Date: Y{year} D{day_of_year}"
         build_mode_status = " | BUILD MODE (B)" if ui_state['is_build_mode'] else ""
         text_surface = self.font.render(status_text + build_mode_status, True, COLOR_TEXT)
-        self.screen.blit(text_surface, (220, 18))
+        self.screen.blit(text_surface, (325, 18))
 
 class Renderer:
     """Handles all drawing of the game world (nodes, links, trains)."""
@@ -300,10 +317,16 @@ class Renderer:
         self.screen_width, self.screen_height = screen.get_size()
 
     def _world_to_screen(self, x, y, ui_state):
-        zoomed_x = x * ui_state['zoom']
-        zoomed_y = y * ui_state['zoom']
+        # The world is scaled to fit the screen, then zoomed, then panned
+        base_x = x * (self.screen_width / self.world_width)
+        base_y = y * (self.screen_height / self.world_height)
+
+        zoomed_x = base_x * ui_state['zoom']
+        zoomed_y = base_y * ui_state['zoom']
+
         screen_x = int(zoomed_x + ui_state['camera_offset'][0])
         screen_y = int(zoomed_y + ui_state['camera_offset'][1])
+
         return screen_x, screen_y
 
     def _screen_to_world(self, x, y, ui_state):
@@ -325,18 +348,25 @@ class Renderer:
             if node1 and node2:
                 start_pos = self._world_to_screen(*node1.pos, ui_state)
                 end_pos = self._world_to_screen(*node2.pos, ui_state)
-                pygame.draw.line(self.screen, COLOR_LINK, start_pos, end_pos, int(1 * ui_state['zoom']))
+                pygame.draw.line(self.screen, COLOR_LINK, start_pos, end_pos, max(1, int(1 * ui_state['zoom'])))
+
+    def get_node_radius(self, zoom):
+        """Calculates the node radius based on zoom level, with a minimum size."""
+        radius = int(4 * zoom)
+        return max(3, radius)
 
     def draw_nodes(self, ui_state):
         for node in self.sim.nodes:
             pos = self._world_to_screen(*node.pos, ui_state)
-            radius = int(7 * ui_state['zoom'])
-            if radius < 2: radius = 2
+            radius = self.get_node_radius(ui_state['zoom'])
             color = COLOR_NODE_CITY if node.node_type == 'city' else COLOR_NODE_INDUSTRY
+
+            # Draw selection highlights
             if ui_state['build_mode_origin_node'] and ui_state['build_mode_origin_node'].id == node.id:
-                 pygame.draw.circle(self.screen, COLOR_SELECTED, pos, radius + 5, 2)
+                pygame.draw.circle(self.screen, COLOR_SELECTED, pos, radius + 4, 2)
             elif ui_state['selected_node'] and ui_state['selected_node'].id == node.id:
-                pygame.draw.circle(self.screen, COLOR_SELECTED, pos, radius + 3, 2)
+                pygame.draw.circle(self.screen, COLOR_SELECTED, pos, radius + 2, 2)
+
             pygame.draw.circle(self.screen, color, pos, radius)
 
     def draw_trains(self, ui_state):
@@ -357,8 +387,7 @@ class Renderer:
                         x2, y2 = self._world_to_screen(*node2.pos, ui_state)
                         pos = (int(x1 + (x2 - x1) * progress), int(y1 + (y2 - y1) * progress))
             if pos:
-                size = int(8 * ui_state['zoom'])
-                if size < 2: size = 2
+                size = max(4, int(8 * ui_state['zoom']))
                 pygame.draw.rect(self.screen, COLOR_TRAIN, (pos[0] - size//2, pos[1] - size//2, size, size))
 
 class Game:
@@ -385,14 +414,14 @@ class Game:
             'active_input': None,
             'train_name_input': "",
             'train_schedule_input': "",
-            'camera_offset': [self.screen.get_width()//2, self.screen.get_height()//2],
-            'zoom': 15.0,
+            'camera_offset': [0,0],
+            'zoom': 1.0,
             'is_panning': False,
             'selected_contract': None,
             'contract_scroll_offset': 0,
         }
         self.tick_timer = 0
-        self.speed_multipliers = {"pause": 0, "1x": 1, "2x": 2, "5x": 5}
+        self.speed_multipliers = {"pause": 0, "1x": 1, "2x": 2, "5x": 5, "10x": 10, "20x": 20, "50x": 50}
 
     def run(self):
         while self.running:
@@ -404,9 +433,11 @@ class Game:
         sys.exit()
 
     def get_node_at_pos(self, screen_pos):
-        for node in self.sim.nodes:
+        # Iterate in reverse so we check nodes drawn on top first
+        for node in reversed(self.sim.nodes):
             node_screen_pos = self.renderer._world_to_screen(*node.pos, self.ui_state)
-            if math.hypot(screen_pos[0] - node_screen_pos[0], screen_pos[1] - node_screen_pos[1]) < 10:
+            radius = self.renderer.get_node_radius(self.ui_state['zoom'])
+            if math.hypot(screen_pos[0] - node_screen_pos[0], screen_pos[1] - node_screen_pos[1]) < radius:
                 return node
         return None
 
@@ -426,13 +457,18 @@ class Game:
                     if ui_action:
                         if 'set_speed' in ui_action: self.ui_state['game_speed'] = ui_action['set_speed']
                         elif 'toggle_create_train_panel' in ui_action: self.ui_state['show_create_train_panel'] = not self.ui_state['show_create_train_panel']
+                        elif 'close_create_train_panel' in ui_action: self.ui_state['show_create_train_panel'] = False
                         elif 'set_active_input' in ui_action: self.ui_state['active_input'] = ui_action['set_active_input']
                         elif 'submit_create_train' in ui_action: self.submit_train()
                         elif 'select_contract' in ui_action: self.ui_state['selected_contract'] = ui_action['select_contract']
                         elif 'accept_contract' in ui_action:
                             self.sim.waybill_manager.accept_contract(ui_action['accept_contract'].id)
                             self.ui_state['selected_contract'] = None
-                        elif 'decline_contract' in ui_action: self.ui_state['selected_contract'] = None
+                        elif 'decline_contract' in ui_action:
+                            if self.sim.waybill_manager.decline_contract(ui_action['decline_contract'].id):
+                                self.ui_state['selected_contract'] = None
+                        elif 'close_contract_details' in ui_action:
+                            self.ui_state['selected_contract'] = None
                         continue
 
                     clicked_node = self.get_node_at_pos(event.pos)
@@ -491,7 +527,10 @@ class Game:
         delta_time = self.clock.get_time() / 1000.0
         multiplier = self.speed_multipliers.get(self.ui_state['game_speed'], 0)
         if multiplier == 0: return
-        ticks_per_second = config.TICKS_PER_DAY * multiplier
+
+        # At 1x speed, 1 tick should pass per second.
+        ticks_per_second = multiplier
+
         if ticks_per_second <= 0: return
         self.tick_timer += delta_time
         time_per_tick = 1.0 / ticks_per_second

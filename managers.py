@@ -190,6 +190,14 @@ class WaybillManager:
             return True
         return False
 
+    def decline_contract(self, contract_id: int) -> bool:
+        """Permanently declines a contract offer."""
+        if contract_id in self.contracts and self.contracts[contract_id].state == 'offered':
+            del self.contracts[contract_id]
+            self.logger.write_line(f"Contract {contract_id} declined.")
+            return True
+        return False
+
     def _create_waybill_from_contract(self, contract: Contract):
         # First, find an available empty car at the origin
         car_to_use = None

@@ -2,8 +2,8 @@
 create_world.py
 
 This script contains the function to procedurally generate the starting
-game world, including the map, terrain, and nodes (cities/industries).
-The initial track network generation has been disabled.
+game world, including the map, terrain, nodes (cities/industries), and
+the initial track network.
 """
 
 import random
@@ -24,7 +24,7 @@ def create_world(size: Tuple[int, int], seed: Optional[int] = None) -> Dict:
         seed: An optional integer to seed the random number generator for reproducible worlds.
 
     Returns:
-        A dictionary containing the list of nodes and an empty list of links.
+        A dictionary containing the list of nodes and links.
     """
     if seed is not None:
         random.seed(seed)
@@ -70,72 +70,68 @@ def create_world(size: Tuple[int, int], seed: Optional[int] = None) -> Dict:
         nodes[1] = Node(id=1, name="First Industry", pos=(width*3//4, height//2), node_type='industry', industry_type='coal_mine')
 
 
-    # # 3. Connect nodes with a minimum spanning tree (Prim's algorithm)
-    # # to ensure all nodes are connected.
-    # all_node_ids = list(nodes.keys())
-    # if not all_node_ids:
-    #     return {"nodes": [], "links": []}
-    # random.shuffle(all_node_ids)
+    # 3. Connect nodes with a minimum spanning tree (Prim's algorithm)
+    # to ensure all nodes are connected.
+    all_node_ids = list(nodes.keys())
+    random.shuffle(all_node_ids)
 
-    # connected_nodes: Set[int] = {all_node_ids[0]}
-    # edges_to_consider = []
+    connected_nodes: Set[int] = {all_node_ids[0]}
+    edges_to_consider = []
 
-    # # Add initial edges from the starting node
-    # for other_node_id in all_node_ids[1:]:
-    #     dist = math.hypot(nodes[all_node_ids[0]].pos[0] - nodes[other_node_id].pos[0],
-    #                       nodes[all_node_ids[0]].pos[1] - nodes[other_node_id].pos[1])
-    #     edges_to_consider.append((dist, all_node_ids[0], other_node_id))
+    # Add initial edges from the starting node
+    for other_node_id in all_node_ids[1:]:
+        dist = math.hypot(nodes[all_node_ids[0]].pos[0] - nodes[other_node_id].pos[0],
+                          nodes[all_node_ids[0]].pos[1] - nodes[other_node_id].pos[1])
+        edges_to_consider.append((dist, all_node_ids[0], other_node_id))
 
-    # edges_to_consider.sort()
+    edges_to_consider.sort()
 
-    # while edges_to_consider and len(connected_nodes) < len(all_node_ids):
-    #     dist, u_id, v_id = edges_to_consider.pop(0)
+    while edges_to_consider and len(connected_nodes) < len(all_node_ids):
+        dist, u_id, v_id = edges_to_consider.pop(0)
 
-    #     if v_id not in connected_nodes:
-    #         connected_nodes.add(v_id)
+        if v_id not in connected_nodes:
+            connected_nodes.add(v_id)
 
-    #         # Calculate terrain cost (simplified)
-    #         mid_x = int((nodes[u_id].pos[0] + nodes[v_id].pos[0]) / 2)
-    #         mid_y = int((nodes[u_id].pos[1] + nodes[v_id].pos[1]) / 2)
-    #         terrain_type = terrain_grid[mid_y][mid_x]
-    #         terrain_cost = config.TERRAIN_TYPES[terrain_type]['cost']
+            # Calculate terrain cost (simplified)
+            mid_x = int((nodes[u_id].pos[0] + nodes[v_id].pos[0]) / 2)
+            mid_y = int((nodes[u_id].pos[1] + nodes[v_id].pos[1]) / 2)
+            terrain_type = terrain_grid[mid_y][mid_x]
+            terrain_cost = config.TERRAIN_TYPES[terrain_type]['cost']
 
-    #         length = dist * terrain_cost
+            length = dist * terrain_cost
 
-    #         links.append(Link(node1_id=u_id, node2_id=v_id, length=length, terrain=terrain_type))
+            links.append(Link(node1_id=u_id, node2_id=v_id, length=length, terrain=terrain_type))
 
-    #         # Add new edges from the newly connected node
-    #         for other_node_id in all_node_ids:
-    #             if other_node_id not in connected_nodes:
-    #                 new_dist = math.hypot(nodes[v_id].pos[0] - nodes[other_node_id].pos[0],
-    #                                       nodes[v_id].pos[1] - nodes[other_node_id].pos[1])
-    #                 edges_to_consider.append((new_dist, v_id, other_node_id))
-    #         edges_to_consider.sort()
+            # Add new edges from the newly connected node
+            for other_node_id in all_node_ids:
+                if other_node_id not in connected_nodes:
+                    new_dist = math.hypot(nodes[v_id].pos[0] - nodes[other_node_id].pos[0],
+                                          nodes[v_id].pos[1] - nodes[other_node_id].pos[1])
+                    edges_to_consider.append((new_dist, v_id, other_node_id))
+            edges_to_consider.sort()
 
-    # # 4. (Optional) Add a few extra links to create cycles
-    # if nodes:
-    #     all_node_ids = list(nodes.keys())
-    #     for _ in range(len(nodes) // 4):
-    #         u_id, v_id = random.sample(all_node_ids, 2)
+    # 4. (Optional) Add a few extra links to create cycles
+    for _ in range(len(nodes) // 4):
+        u_id, v_id = random.sample(all_node_ids, 2)
 
-    #         # Check if link already exists
-    #         is_existing = False
-    #         for link in links:
-    #             if (link.node1_id == u_id and link.node2_id == v_id) or \
-    #                (link.node1_id == v_id and link.node2_id == u_id):
-    #                 is_existing = True
-    #                 break
+        # Check if link already exists
+        is_existing = False
+        for link in links:
+            if (link.node1_id == u_id and link.node2_id == v_id) or \
+               (link.node1_id == v_id and link.node2_id == u_id):
+                is_existing = True
+                break
 
-    #         if not is_existing:
-    #             dist = math.hypot(nodes[u_id].pos[0] - nodes[v_id].pos[0],
-    #                               nodes[u_id].pos[1] - nodes[v_id].pos[1])
-    #             mid_x = int((nodes[u_id].pos[0] + nodes[v_id].pos[0]) / 2)
-    #             mid_y = int((nodes[u_id].pos[1] + nodes[v_id].pos[1]) / 2)
-    #             terrain_type = terrain_grid[mid_y][mid_x]
-    #             terrain_cost = config.TERRAIN_TYPES[terrain_type]['cost']
-    #             length = dist * terrain_cost
+        if not is_existing:
+            dist = math.hypot(nodes[u_id].pos[0] - nodes[v_id].pos[0],
+                              nodes[u_id].pos[1] - nodes[v_id].pos[1])
+            mid_x = int((nodes[u_id].pos[0] + nodes[v_id].pos[0]) / 2)
+            mid_y = int((nodes[u_id].pos[1] + nodes[v_id].pos[1]) / 2)
+            terrain_type = terrain_grid[mid_y][mid_x]
+            terrain_cost = config.TERRAIN_TYPES[terrain_type]['cost']
+            length = dist * terrain_cost
 
-    #             links.append(Link(node1_id=u_id, node2_id=v_id, length=length, terrain=terrain_type))
+            links.append(Link(node1_id=u_id, node2_id=v_id, length=length, terrain=terrain_type))
 
 
     return {"nodes": list(nodes.values()), "links": links}
