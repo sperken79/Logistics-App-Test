@@ -302,7 +302,8 @@ class UIManager:
         tick = self.sim.game_tick
         year = config.STARTING_YEAR + (tick // (config.TICKS_PER_DAY * 365))
         day_of_year = (tick // config.TICKS_PER_DAY) % 365 + 1
-        status_text = f"Cash: ${cash:,.2f} | Date: Y{year} D{day_of_year}"
+        hour = tick % config.TICKS_PER_DAY
+        status_text = f"Cash: ${cash:,.2f} | Date: Y{year} D{day_of_year} H{hour:02d}"
         build_mode_status = " | BUILD MODE (B)" if ui_state['is_build_mode'] else ""
         text_surface = self.font.render(status_text + build_mode_status, True, COLOR_TEXT)
         self.screen.blit(text_surface, (325, 18))
