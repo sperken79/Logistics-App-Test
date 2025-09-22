@@ -165,8 +165,9 @@ class WaybillManager:
                 consumers = self._get_consuming_industries(cargo)
                 if consumers:
                     destination_node = random.choice(consumers)
-                    # Avoid offering contracts for paths that don't exist
-                    if self.find_path(origin_node.id, destination_node.id):
+                    # Allow contracts to be offered even if no path exists.
+                    # The player's job is to build the path.
+                    if origin_node.id != destination_node.id:
                         self._create_contract_offer(origin_node.id, destination_node.id, cargo)
 
     def _create_contract_offer(self, origin_id, dest_id, cargo):
