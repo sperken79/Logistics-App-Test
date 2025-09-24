@@ -50,6 +50,7 @@ class Railcar:
     current_location_id: Optional[int] # Node ID
     state: str = "empty"  # See Waybill lifecycle for states
     waybill: Optional['Waybill'] = None # The specific waybill this car is servicing
+    ticks_in_state: int = 0
 
 @dataclass
 class Waybill:

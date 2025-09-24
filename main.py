@@ -58,7 +58,7 @@ class Simulation:
         self.game_tick += 1
         # Pass the current tick to the managers that need it
         self.waybill_manager.game_tick = self.game_tick
-        self.waybill_manager.update()
+        self.waybill_manager.update(self.train_manager)
         self.train_manager.update()
 
     def build_track(self, node1: Node, node2: Node) -> bool:

@@ -54,21 +54,19 @@ class WaybillManager:
 
         self._contract_id_counter = 0
         self._waybill_id_counter = 0
-        self._railcar_id_counter = 0
-        self.railcars: Dict[int, Railcar] = {}
 
         self.adjacency_list = defaultdict(list)
         for link in self.links:
             self.adjacency_list[link.node1_id].append((link.node2_id, link.length))
             self.adjacency_list[link.node2_id].append((link.node1_id, link.length))
 
-    def update(self):
+    def update(self, train_manager: 'TrainManager'):
         """Primary update loop, called each game tick."""
         self._update_expired_contracts()
         self._try_generate_new_contracts()
         if self.game_tick % config.TICKS_PER_DAY == 0:
             self._generate_waybills_from_active_contracts()
-        self._update_waybill_states()
+        self._update_waybill_states(train_manager)
 
     def _update_expired_contracts(self):
         for contract_id in list(self.contracts.keys()):
@@ -127,26 +125,27 @@ class WaybillManager:
         self.waybills[self._waybill_id_counter] = new_waybill
         self._waybill_id_counter += 1
 
-    def _update_waybill_states(self):
-        # This is where logic for loading/unloading timers will go
-        for car in self.railcars.values():
+    def _update_waybill_states(self, train_manager: 'TrainManager'):
+        """Handles timed state transitions for loading and unloading cars."""
+        for car in train_manager.railcars.values():
             if car.waybill and car.waybill.state in ['Loading', 'Unloading']:
-                # Simplified: instant loading for now.
-                # In future, this would be a timer.
-                if car.waybill.state == 'Loading':
+                car.ticks_in_state += 1
+                if car.waybill.state == 'Loading' and car.ticks_in_state >= config.LOADING_TICKS:
                     car.waybill.state = 'WaitingForPickup'
-                elif car.waybill.state == 'Unloading':
-                    self.complete_waybill(car.waybill)
+                    car.ticks_in_state = 0
+                elif car.waybill.state == 'Unloading' and car.ticks_in_state >= config.UNLOADING_TICKS:
+                    self.complete_waybill(car.waybill, train_manager)
+                    car.ticks_in_state = 0
 
-    def complete_waybill(self, waybill: Waybill):
+    def complete_waybill(self, waybill: Waybill, train_manager: 'TrainManager'):
+        """Finalizes a waybill, calculating revenue and updating service ratings."""
         waybill.state = 'Completed'
         contract = self.contracts.get(waybill.contract_id)
         if contract:
-            # Payout
             distance = self._heuristic(waybill.origin_id, waybill.destination_id)
             revenue = contract.revenue_per_car + (distance * config.REVENUE_PER_DISTANCE_UNIT)
             self.economy_manager.add_revenue(revenue)
-            # Update service rating
+
             origin_node = self.nodes[waybill.origin_id]
             dest_node = self.nodes[waybill.destination_id]
             if self.game_tick <= waybill.delivery_due_tick:
@@ -155,11 +154,15 @@ class WaybillManager:
             else:
                 origin_node.service_rating = max(0, origin_node.service_rating - 2)
                 dest_node.service_rating = max(0, dest_node.service_rating - 2)
-        # Clean up
-        if waybill.assigned_railcar_id in self.railcars:
-            self.railcars[waybill.assigned_railcar_id].waybill = None
-        del self.waybills[waybill.id]
 
+        # Reset the railcar to be available for new tasks
+        if waybill.assigned_railcar_id in train_manager.railcars:
+            car = train_manager.railcars[waybill.assigned_railcar_id]
+            car.waybill = None
+            car.state = "empty" # FIX: Reset car state
+
+        if waybill.id in self.waybills:
+            del self.waybills[waybill.id]
 
     def accept_contract(self, contract_id: int) -> bool:
         if contract_id in self.contracts and self.contracts[contract_id].status == 'offered':
@@ -177,7 +180,6 @@ class WaybillManager:
         return False
 
     def find_path(self, start_node_id, end_node_id):
-        # A* implementation (as before)
         if start_node_id not in self.nodes or end_node_id not in self.nodes: return None
         open_set = [(0, start_node_id)]
         came_from, g_score, f_score = {}, {}, {}
@@ -212,18 +214,42 @@ class TrainManager:
         self.logger = logger
         self.trains: Dict[int, Train] = {}
         self._train_id_counter = 0
+        self._railcar_id_counter = 0
+        self.railcars: Dict[int, Railcar] = {}
+
+    def create_railcar(self, railcar_type: str, location_id: int) -> Railcar:
+        car_config = config.RAILCARS[railcar_type]
+        if not self.economy_manager.deduct_cost(car_config['cost']):
+            return None
+        new_car = Railcar(id=self._railcar_id_counter, railcar_type=railcar_type, current_location_id=location_id)
+        self.railcars[self._railcar_id_counter] = new_car
+        self._railcar_id_counter += 1
+        self.nodes[location_id].cars_at_node.append(new_car)
+        return new_car
 
     def create_train(self, name: str, locomotive_type: str, schedule: List[int]):
-        # Same as before
         if not schedule: return None
         cost = config.LOCOMOTIVE_STATS[locomotive_type]['cost']
         if not self.economy_manager.deduct_cost(cost): return None
-        new_train = Train(id=self._train_id_counter, name=name, locomotive_type=locomotive_type, schedule=schedule, current_location_id=schedule[0])
+        start_node_id = schedule[0]
+        new_train = Train(id=self._train_id_counter, name=name, locomotive_type=locomotive_type, schedule=schedule, current_location_id=start_node_id)
+
+        for _ in range(5):
+            car = self.create_railcar('flatcar', start_node_id)
+            if car: new_train.cars.append(car)
+        for _ in range(5):
+            car = self.create_railcar('boxcar', start_node_id)
+            if car: new_train.cars.append(car)
+
+        for car in new_train.cars:
+            if car in self.nodes[start_node_id].cars_at_node:
+                self.nodes[start_node_id].cars_at_node.remove(car)
+            car.current_location_id = None
+
         self.trains[self._train_id_counter] = new_train; self._train_id_counter += 1
         return new_train
 
     def update(self):
-        """Primary update loop for all trains."""
         for train in self.trains.values():
             if train.state == 'idle':
                 self._find_and_assign_task(train)
@@ -231,13 +257,11 @@ class TrainManager:
                 self._execute_task(train)
 
     def _find_and_assign_task(self, train: Train):
-        # Find a pending waybill that this train can handle
         for waybill in self.waybill_manager.waybills.values():
             if waybill.state == 'Pending':
-                # Check if train has a compatible empty car
                 compatible_car = None
                 for car in train.cars:
-                    if car.waybill is None and waybill.cargo in config.RAILCARS[car.railcar_type]['compatible_cargo']:
+                    if car.state == 'empty' and waybill.cargo in config.RAILCARS[car.railcar_type]['compatible_cargo']:
                         compatible_car = car
                         break
                 if compatible_car:
@@ -246,48 +270,52 @@ class TrainManager:
                     waybill.assigned_train_id = train.id
                     waybill.assigned_railcar_id = compatible_car.id
                     compatible_car.waybill = waybill
+                    compatible_car.state = 'in_service'
                     train.state = 'running'
-                    self.logger.write_line(f"Train {train.name} assigned to Waybill {waybill.id}")
-                    return # Stop after finding one task
+                    return
 
     def _execute_task(self, train: Train):
         waybill = train.current_task
         if not waybill: train.state = 'idle'; return
 
-        # State machine for the train's task
-        if waybill.state == 'Servicing': # Move to origin
+        car = self.railcars[waybill.assigned_railcar_id]
+
+        if waybill.state == 'Servicing':
             self._move_train_to_destination(train, waybill.origin_id)
             if train.current_location_id == waybill.origin_id:
+                train.cars.remove(car)
+                self.nodes[waybill.origin_id].cars_at_node.append(car)
+                car.current_location_id = waybill.origin_id
                 waybill.state = 'Loading'
-        elif waybill.state == 'Loading': # At origin, loading car
-            # This is handled by WaybillManager._update_waybill_states
-            pass
-        elif waybill.state == 'WaitingForPickup': # Move to origin again to pickup
+        elif waybill.state == 'WaitingForPickup':
             self._move_train_to_destination(train, waybill.origin_id)
             if train.current_location_id == waybill.origin_id:
+                self.nodes[waybill.origin_id].cars_at_node.remove(car)
+                train.cars.append(car)
+                car.current_location_id = None
                 waybill.state = 'InTransit'
-        elif waybill.state == 'InTransit': # Move to destination
+        elif waybill.state == 'InTransit':
             self._move_train_to_destination(train, waybill.destination_id)
             if train.current_location_id == waybill.destination_id:
+                train.cars.remove(car)
+                self.nodes[waybill.destination_id].cars_at_node.append(car)
+                car.current_location_id = waybill.destination_id
                 waybill.state = 'Unloading'
-        elif waybill.state == 'Unloading': # At destination, unloading car
-             # This is handled by WaybillManager._update_waybill_states
-            pass
         elif waybill.state == 'Completed':
             train.current_task = None
             train.state = 'idle'
 
     def _move_train_to_destination(self, train: Train, destination_id: int):
         if train.current_location_id == destination_id: return
-
         if not train.path or train.path[-1] != destination_id:
             path = self.waybill_manager.find_path(train.current_location_id, destination_id)
             if path and len(path) > 1:
                 train.path = path; train.path_index = 0
             else:
-                train.state = 'idle'; return # No path
+                train.state = 'idle'; return
 
         if train.current_link is None:
+            if train.path_index >= len(train.path) -1: return
             start_node = train.path[train.path_index]
             end_node = train.path[train.path_index + 1]
             train.current_link = (start_node, end_node)
@@ -295,14 +323,14 @@ class TrainManager:
             train.current_location_id = None
 
         if train.current_link:
-            link = self.links_map[train.current_link]
-            train.progress_on_link += 1.0 # Simplified speed
+            link = self.links_map.get(train.current_link) or self.links_map.get((train.current_link[1], train.current_link[0]))
+            if not link:
+                train.state = 'idle'; train.current_link = None; return
+            train.progress_on_link += 1.0
             if train.progress_on_link >= link.length:
                 arrival_node_id = train.current_link[1]
                 train.current_location_id = arrival_node_id
-                train.current_link = None
-                train.progress_on_link = 0
+                train.current_link = None; train.progress_on_link = 0
                 train.path_index += 1
                 if arrival_node_id == destination_id:
-                    train.path = []
-                    train.path_index = 0
+                    train.path = []; train.path_index = 0
